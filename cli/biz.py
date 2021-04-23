@@ -61,7 +61,6 @@ def create_config_file(config_path: Path):
     if config_path.exists():
         return
 
-    typer.echo(f"{os.linesep} !!!!! The generated file needs to be rewritten: {config_path} !!!!!")
     template = jinja2_env.get_template("config.jinja2")
     content = template.render()
     with config_path.open(mode="w") as f:
@@ -102,13 +101,6 @@ def create_init_file(init_path: Path):
             f.write(custom_import)
 
 
-def create_utils_file(utils_path: Path):
-    template = jinja2_env.get_template("utils.jinja2")
-    content = template.render()
-    with utils_path.open(mode="w") as f:
-        f.write(content + os.linesep)
-
-
 # noinspection PyTypeChecker
 def add_service(repo_name: str, service: str, target_dir: str) -> None:
     work_dir = Path.cwd()
@@ -137,7 +129,6 @@ def add_service(repo_name: str, service: str, target_dir: str) -> None:
     os.system(f"pb2py {dst_dir / f'{service}_pb2.py'} > {dst_dir / f'{service}_schema.py'}")
     create_init_file(dst_dir.parent / "__init__.py")
     create_config_file(dst_dir.parent / "_config.py")
-    create_utils_file(dst_dir.parent / "_utils.py")
 
     typer.echo()
 
