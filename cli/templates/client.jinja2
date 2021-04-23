@@ -4,7 +4,7 @@ from google.protobuf.empty_pb2 import Empty
 from loguru import logger
 
 from . import {{ filename }}_pb2, {{ filename }}_pb2_grpc, {{ filename }}_schema
-from .._config import GRPC_ADDRESS, GRPC_LOGGER
+from .._config import GRPC_ADDRESS
 
 try:
     from .._config import GRPC_CHANNEL_OPTIONS
