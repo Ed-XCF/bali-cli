@@ -1,10 +1,12 @@
-from bali.utils import MessageToDict, ParseDict
+import logging
+from typing import Iterator
+
 from grpc import insecure_channel
 from google.protobuf.empty_pb2 import Empty
-from loguru import logger
 
 from . import {{ filename }}_pb2, {{ filename }}_pb2_grpc, {{ filename }}_schema
-from .._config import GRPC_ADDRESS
+from .._config import GRPC_ADDRESS, GRPC_LOGGER, GRPC_CACHE
+from .._utils import MessageToDict, ParseDict, make_cache_key
 
 try:
     from .._config import GRPC_CHANNEL_OPTIONS
@@ -13,26 +15,40 @@ except ImportError:
 
 __all__ = ["{{ service | replace("Service", "") }}Client"]
 
+logger = logging.getLogger(GRPC_LOGGER)
+
 
 class {{ service | replace("Service", "") }}Client:
     URL = f"{GRPC_ADDRESS['host']}:{GRPC_ADDRESS['port']}"
     s = schemas = {{ filename }}_schema
-{% for method in methods %}
-    def {{ method[0] | decamelize }}(self{% if method[1] == "google.protobuf.Empty" %}{% else %}, schema: {{ filename }}_schema.{{ method[1] }}{% endif %}, *, fail_silently=False) -> {{ filename }}_schema.{{ method[2] }}:
+{% for method in simple_methods %}
+    def {{ method[0] | decamelize }}(self{% if method[1] == "google.protobuf.Empty" %}{% else %}, schema: {{ filename }}_schema.{{ method[1] }}{% endif %}, *, fail_silently=False, cache_timeout=0) -> {{ filename }}_schema.{{ method[2] }}:
+
+        service_name, rpc_name = "{{ service }}", "{{ method[0] }}"
+
+        # check cache
+        if GRPC_CACHE and cache_timeout:
+             cache_key = make_cache_key(service_name, rpc_name, {% if method[1] != "google.protobuf.Empty" %}schema{% endif %})
+             cached = GRPC_CACHE.get(cache_key)
+             if cached is not None:
+                 logger.info("gRPC client of %s.%s received(hit cache): %s", service_name, rpc_name, cached)
+                 return cached
+
         with insecure_channel(self.URL, options=GRPC_CHANNEL_OPTIONS) as channel:
             stub = {{ filename }}_pb2_grpc.{{ service }}Stub(channel)
             service_name, rpc_name = "{{ service }}", "{{ method[0] }}"
     {% if method[1] == "google.protobuf.Empty" %}
-            logger.info("gRPC client of {}.{} send nothing", service_name, rpc_name)
+            logger.info("gRPC client of %s.%s send nothing", service_name, rpc_name)
             request = Empty()
     {% else %}
             payload = schema.dict()
-            logger.info("gRPC client of {}.{} send: {}", service_name, rpc_name, payload)
+            logger.info("gRPC client of %s.%s send: %s", service_name, rpc_name, payload)
             request = ParseDict(payload, {{ filename }}_pb2.{{ method[1] }}())
     {% endif %}
             try:
                 response = stub.{{ method[0] }}(request)
             except Exception as e:
+                logger.error("gRPC client of %s.%s exception: %s", service_name, rpc_name, e)
                 if not fail_silently:
                     raise
                 logger.warning(repr(e))
@@ -40,6 +56,35 @@ class {{ service | replace("Service", "") }}Client:
             else:
                 reply = MessageToDict(response, True, True)
 
-            logger.info("gRPC client of {}.{} received: {}", service_name, rpc_name, reply)
+            logger.info("gRPC client of %s.%s received: %s", service_name, rpc_name, reply)
+            result = {{ filename }}_schema.{{ method[2] }}(**reply)
+            # write cache
+            if GRPC_CACHE and cache_timeout:
+                GRPC_CACHE.set(cache_key, result, timeout=cache_timeout)
+
             return {{ filename }}_schema.{{ method[2] }}(**reply)
+
+{% endfor %}
+{% for method in request_stream_methods %}
+    def {{ method[0] | decamelize }}(self, iterator: Iterator[{{ filename }}_schema.{{ method[1] }}], *, fail_silently=False) -> {{ filename }}_schema.{{ method[2] }}:
+        service_name, rpc_name = "{{ service }}", "{{ method[0] }}"
+        with insecure_channel(self.URL, options=GRPC_CHANNEL_OPTIONS) as channel:
+            stub = {{ filename }}_pb2_grpc.{{ service }}Stub(channel)
+            service_name, rpc_name = "{{ service }}", "{{ method[0] }}"
+            payload = schema.dict()
+            logger.info("gRPC client of %s.%s send iterator", service_name, rpc_name)
+            request = (ParseDict(i.dict(), {{ filename }}_pb2.{{ method[1] }}()) for i in iterator)
+            try:
+                response = stub.{{ method[0] }}(request)
+            except Exception as e:
+                logger.error("gRPC client of %s.%s exception: %s", service_name, rpc_name, e)
+                if not fail_silently:
+                    raise
+                logger.warning(repr(e))
+                reply = {}
+            else:
+                reply = MessageToDict(response, True, True)
+
+            logger.info("gRPC client of %s.%s received: %s", service_name, rpc_name, reply)
+            result = {{ filename }}_schema.{{ method[2] }}(**reply)
 {% endfor %}
