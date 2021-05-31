@@ -1,15 +1,12 @@
+from typing import Iterator
+
 from bali.utils import MessageToDict, ParseDict
 from grpc import insecure_channel
 from google.protobuf.empty_pb2 import Empty
 from loguru import logger
 
 from . import {{ filename }}_pb2, {{ filename }}_pb2_grpc, {{ filename }}_schema
-from .._config import GRPC_ADDRESS
-
-try:
-    from .._config import GRPC_CHANNEL_OPTIONS
-except ImportError:
-    GRPC_CHANNEL_OPTIONS = None
+from .._config import GRPC_ADDRESS, GRPC_CHANNEL_OPTIONS
 
 __all__ = ["{{ service | replace("Service", "") }}Client"]
 
@@ -42,4 +39,26 @@ class {{ service | replace("Service", "") }}Client:
 
             logger.info("gRPC client of {}.{} received: {}", service_name, rpc_name, reply)
             return {{ filename }}_schema.{{ method[2] }}(**reply)
+{% endfor %}{% for method in request_stream_methods %}
+    def {{ method[0] | decamelize }}(self, iterator: Iterator[{{ filename }}_schema.{{ method[1] }}], *, fail_silently=False) -> {{ filename }}_schema.{{ method[2] }}:
+        with insecure_channel(self.URL, options=GRPC_CHANNEL_OPTIONS) as channel:
+            stub = {{ filename }}_pb2_grpc.{{ service }}Stub(channel)
+            service_name, rpc_name = "{{ service }}", "{{ method[0] }}"
+            logger.info("gRPC client of %s.%s send iterator", service_name, rpc_name)
+            request = (ParseDict(i.dict(), {{ filename }}_pb2.{{ method[1] }}()) for i in iterator)
+            try:
+                response = stub.{{ method[0] }}(request)
+            except Exception as e:
+                logger.error("gRPC client of %s.%s exception: %s", service_name, rpc_name, e)
+                if not fail_silently:
+                    raise
+                logger.warning(repr(e))
+                reply = {}
+            else:
+                reply = MessageToDict(response, True, True)
+
+            logger.info("gRPC client of %s.%s received: %s", service_name, rpc_name, reply)
+            return {{ filename }}_schema.{{ method[2] }}(**reply)
 {% endfor %}
+
+
