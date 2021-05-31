@@ -38,21 +38,30 @@ def compile_proto_file(output_dir: Path, proto_file_name: str) -> None:
 
 def compile_client_file(proto_path: Path, service_name: str):
     service_pattern = re.compile(r"^service\s+(.*?)\s+{$")
-    rpc_pattern = re.compile(r"\s+rpc\s+(.*?)[\s(]+(.*?)[)\s]+returns[\s(]+(.*?)[)\s]+{")
+    simple_rpc_pattern = re.compile(r"\s+rpc\s+(.*?)[\s(]+(.*?)[)\s]+returns[\s(]+(.*?)[)\s]+{")
+    request_stream_rpc_pattern = re.compile(r"\s+rpc\s+(.*?)[\s(stream]+(.*?)[)\s]+returns[\s(]+(.*?)[)\s]+{")
 
     # 按照项目约定，一个 proto 文件中只有一个 service
-    service, methods = None, []
+    service, simple_methods, request_stream_methods = None, [], []
     with proto_path.open() as f:
         for i in f.readlines():
             _service = service_pattern.match(i)
-            _rpc = rpc_pattern.match(i)
+            _simple_rpc = simple_rpc_pattern.match(i)
+            _request_stream_rpc = request_stream_rpc_pattern.match(i)
             if _service:
                 service = _service.group(1).strip()
-            if _rpc:
-                methods.append([i.strip() for i in _rpc.groups()])
+            elif _request_stream_rpc:
+                request_stream_methods.append([i.strip() for i in _request_stream_rpc.groups()])
+            elif _simple_rpc:
+                simple_methods.append([i.strip() for i in _simple_rpc.groups()])
 
     template = jinja2_env.get_template("client.jinja2")
-    content = template.render(service=service, methods=methods, filename=proto_path.stem)
+    content = template.render(
+        service=service,
+        simple_methods=simple_methods,
+        request_stream_methods=request_stream_methods,
+        filename=proto_path.stem,
+    )
     with (proto_path.parent / f"{service_name}_client.py").open(mode="w") as f:
         f.write(content)
 
@@ -102,6 +111,13 @@ def create_init_file(init_path: Path):
             f.write(custom_import)
 
 
+def create_utils_file(utils_path: Path):
+    template = jinja2_env.get_template("utils.jinja2")
+    content = template.render()
+    with utils_path.open(mode="w") as f:
+        f.write(content + os.linesep)
+
+
 # noinspection PyTypeChecker
 def add_service(repo_name: str, service: str, target_dir: str) -> None:
     work_dir = Path.cwd()
@@ -130,6 +146,7 @@ def add_service(repo_name: str, service: str, target_dir: str) -> None:
     os.system(f"pb2py {dst_dir / f'{service}_pb2.py'} > {dst_dir / f'{service}_schema.py'}")
     create_init_file(dst_dir.parent / "__init__.py")
     create_config_file(dst_dir.parent / "_config.py")
+    create_utils_file(dst_dir.parent / "_utils.py")
 
     typer.echo()
 
